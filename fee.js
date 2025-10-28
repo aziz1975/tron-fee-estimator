@@ -3,7 +3,7 @@ require('dotenv').config();
 const {TronWeb} = require('tronweb');
 
 // ===== env / config =====
-const FULL_NODE = process.env.TRON_FULL_NODE || 'https://mainnet.tron.tronql.com/';
+const FULL_NODE = process.env.TRON_FULL_NODE || 'https://nile.tron.tronql.com/';
 const TRONQL_API_KEY = process.env.TRONQL_API_KEY || '';        // used when URL contains 'tronql'
 const TRONGRID_API_KEY = process.env.TRON_API_KEY || '';        // used when URL contains 'trongrid'
 const PRIVATE_KEY = process.env.PRIVATE_KEY || '';
