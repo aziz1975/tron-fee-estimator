@@ -3,23 +3,18 @@ require('dotenv').config();
 const {TronWeb} = require('tronweb');
 
 // ===== env / config =====
-const FULL_NODE = process.env.TRON_FULL_NODE || 'https://nile.tron.tronql.com/';
-const TRONQL_API_KEY = process.env.TRONQL_API_KEY || '';        // used when URL contains 'tronql'
-const TRONGRID_API_KEY = process.env.TRON_API_KEY || '';        // used when URL contains 'trongrid'
-const PRIVATE_KEY = process.env.PRIVATE_KEY || '';
-const DEFAULT_USDT_T = process.env.DEFAULT_USDT || 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'; // Base58
-const IS_TRONQL = /tronql/i.test(FULL_NODE);
-const IS_TRONGRID = /trongrid/i.test(FULL_NODE);
+const privateKey   = process.env.PRIVATE_KEY_NILE;
+const fullHost = process.env.TRON_FULL_NODE || 'https://nile.trongrid.io';
+const DEFAULT_USDT_T = process.env.DEFAULT_USDT || 'TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf'; // Base58
+
 // ========================
 
-// Build TronWeb with correct headers for the provider in use
 function makeTronWeb() {
-  const headers = {};
-  if (IS_TRONQL && TRONQL_API_KEY) headers['Authorization'] = TRONQL_API_KEY;        // TronQL
-  if (IS_TRONGRID && TRONGRID_API_KEY) headers['TRON-PRO-API-KEY'] = TRONGRID_API_KEY; // TronGrid
-  const config = { fullHost: FULL_NODE, headers };
-  if (PRIVATE_KEY) config.privateKey = PRIVATE_KEY;
-  return new TronWeb(config);
+  return new TronWeb({
+  fullHost,
+  privateKey
+});
+
 }
 
 const sunToTRX = s => s / 1e6;
@@ -69,29 +64,6 @@ function normalizeParams(tw, params) {
   });
 }
 
-/** Safe wrappers that never throw; return null on failure.
- * For TronQL, hex addresses are preferred (per their docs).
- */
-async function safeEstimateEnergy(tw, { contractHex, selector, params, issuerBase58, issuerHex, callValueSun = 0 }) {
-  // Try HEX first (TronQL docs show hex), then Base58
-  try {
-    const r = await tw.transactionBuilder.estimateEnergy(
-      contractHex, selector, { callValue: callValueSun }, params, issuerHex
-    );
-    console.log('energy_required: ' + r.energy_required);
-    if (r?.result?.result && typeof r.energy_required === 'number') return r.energy_required;
-  } catch (_) {}
-  try {
-    const r = await tw.transactionBuilder.estimateEnergy(
-      contractHex, selector, { callValue: callValueSun }, params, issuerBase58
-    );
-    console.log('energy_required: ' + r.energy_required);
-    if (r?.result?.result && typeof r.energy_required === 'number') return r.energy_required;
-  } catch (_) {}
-  
-  return null;
-}
-
 async function safeTriggerConstantEnergy(tw, { contractHex, selector, params, issuerBase58, callValueSun = 0 }) {
   try {
     const r = await tw.transactionBuilder.triggerConstantContract(
@@ -127,16 +99,10 @@ async function estimateTrc20Transfer(tw, { tokenT, fromT, toT, amount }, prices)
   const selector = 'transfer(address,uint256)';
   const params   = [{ type: 'address', value: toHex }, { type: 'uint256', value: String(amount) }];
 
-  let energy = await safeEstimateEnergy(tw, {
-    contractHex: tokenHex, selector, params,
-    issuerBase58: fromT, issuerHex: fromHex
-  });
-  console.log('Estimated energy (trc20):', energy);
-  if (energy == null) {
     energy = await safeTriggerConstantEnergy(tw, {
       contractHex: tokenHex, selector, params, issuerBase58: fromT
     });
-  }
+
   if (energy == null) energy = 0;
 
   // Build tx (issuer Base58 + feeLimit) for bandwidth bytes
@@ -163,16 +129,10 @@ async function estimateContractCall(tw, { contractT, fromT, selector, paramsJson
   if (paramsJson) params = JSON.parse(paramsJson);
   params = normalizeParams(tw, params);
 
-  let energy = await safeEstimateEnergy(tw, {
-    contractHex, selector, params,
-    issuerBase58: fromT, issuerHex: fromHex, callValueSun
-  });
-   console.log('Estimated energy (trc20):', energy);
-  if (energy == null) {
     energy = await safeTriggerConstantEnergy(tw, {
       contractHex, selector, params, issuerBase58: fromT, callValueSun
     });
-  }
+
   if (energy == null) energy = 0;
 
   const trigger = await tw.transactionBuilder.triggerSmartContract(
@@ -203,13 +163,11 @@ function parseArgs(argv) {
   const [,, cmd, ...rest] = process.argv;
   if (!cmd || ['-h','--help','help'].includes(cmd)) {
     console.log(`
-TRON Fee Estimator (TronQL-ready; uses .env; Base58 USDT)
+TRON Fee Estimator (TRONGRID-ready; uses .env; Base58 USDT)
 
 ENV (.env):
-  TRON_FULL_NODE=${FULL_NODE}
-  TRONQL_API_KEY=${TRONQL_API_KEY ? '<set>' : ''}
-  TRON_API_KEY=${TRONGRID_API_KEY ? '<set>' : ''}
-  PRIVATE_KEY=${PRIVATE_KEY ? '<set>' : ''}
+  TRON_FULL_NODE=${fullHost}
+  PRIVATE_KEY=${privateKey ? '<set>' : ''}
   DEFAULT_USDT=${DEFAULT_USDT_T}
 
 USAGE:
@@ -233,11 +191,7 @@ USAGE:
       await tw.fullNode.request('wallet/getnowblock', 'post', {});
     }
   } catch (e) {
-    const msg = (e && (e.response?.data || e.message || String(e))) || '';
-    if (/apikey/i.test(msg) || /api key/i.test(msg)) {
-      if (IS_TRONQL) throw new Error(`TronQL: ${msg}\nSet TRONQL_API_KEY in .env.`);
-      if (IS_TRONGRID) throw new Error(`TronGrid: ${msg}\nSet TRON_API_KEY in .env.`);
-    }
+
     throw e;
   }
 
@@ -269,7 +223,7 @@ USAGE:
   }
 
   console.log(JSON.stringify({
-    node: FULL_NODE,
+    node: fullHost,
     prices: {
       energySunPerUnit: prices.energySunPerUnit,
       trxPerEnergy: prices.trxPerEnergy,
