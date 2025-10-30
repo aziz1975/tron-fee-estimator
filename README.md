@@ -65,6 +65,8 @@ node fee.js contract-call   --contract <TOKEN_OR_CONTRACT_TADDR>   --selector 'a
 node fee.js contract-call   --contract <TOKEN_TADDR>   --selector 'transfer(address,uint256)'   --params   '[{"type":"address","value":"<RECIPIENT_TADDR>"},{"type":"uint256","value":"<RAW_UNITS>"}]'   --from     <OWNER_TADDR>   --callValue 0
 ```
 
+For contract-call , depending on your OS you might need to escape double quotes if sending params directly in terminal, as a recommendation please use a json file instead and adjust this scrip as needed.
+
 ### C) TRX transfer (bandwidth only)
 
 ```bash
@@ -76,6 +78,10 @@ node fee.js trx-transfer   --from <SENDER_TADDR>   --to   <RECIPIENT_TADDR>   --
 ```bash
 node fee.js trc20-transfer   --token  <TOKEN_TADDR>   --from   <SENDER_TADDR>   --to     <RECIPIENT_TADDR>   --amount <RAW_UNITS>
 ```
+
+Note: Make sure your "from" address has positive balance on the selected TRC20 token, otherwise estimation will fail to properly estimate the energy fee
+
+
 
 ## Example (Nile token used in tests)
 
