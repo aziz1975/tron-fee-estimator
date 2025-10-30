@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 require('dotenv').config();
-const {TronWeb} = require('tronweb');
-
+const { TronWeb } = require('tronweb');
 // ===== env / config =====
-const privateKey   = process.env.PRIVATE_KEY_NILE;
 const fullHost = process.env.TRON_FULL_NODE || 'https://nile.trongrid.io';
 const DEFAULT_USDT_T = process.env.DEFAULT_USDT || 'TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf'; // Base58
 
@@ -11,9 +9,8 @@ const DEFAULT_USDT_T = process.env.DEFAULT_USDT || 'TXYZopYRdj2D9XRtbG411XZZ3kM5
 
 function makeTronWeb() {
   return new TronWeb({
-  fullHost,
-  privateKey
-});
+    fullHost,
+  });
 
 }
 
@@ -39,8 +36,8 @@ async function getChainPrices(tronWeb) {
   const b = params.find(p => p.key === 'getTransactionFee');  // TRX/byte OR sun/byte
   if (!e || !b) throw new Error('Missing chain params getEnergyFee/getTransactionFee');
   const energySunPerUnit = Number(e.value);          // e.g., 100 sun/Energy
-  const trxPerEnergy     = sunToTRX(energySunPerUnit);
-  const trxPerByte       = normalizeTrxPerByte(b.value);
+  const trxPerEnergy = sunToTRX(energySunPerUnit);
+  const trxPerByte = normalizeTrxPerByte(b.value);
   return { energySunPerUnit, trxPerEnergy, trxPerByte };
 }
 
@@ -64,14 +61,19 @@ function normalizeParams(tw, params) {
   });
 }
 
-async function safeTriggerConstantEnergy(tw, { contractHex, selector, params, issuerBase58, callValueSun = 0 }) {
+async function safeTriggerConstantEnergy(tw, { contractHex, selector, params, from, callValueSun = 0 }) {
   try {
+    console.log("Estimating fees:");
+    console.log("from: ", from);
+    console.log("to: ", params[0].value);
+    console.log("");
     const r = await tw.transactionBuilder.triggerConstantContract(
-      contractHex, selector, { from: issuerBase58, callValue: callValueSun, feeLimit: 1_000_000_000 }, params
+      contractHex, selector, { from: from, callValue: callValueSun, feeLimit: 1_000_000_000 }, params, from
     );
     const used = r.energy_used ?? r.energy_used_total ?? 0;
     return typeof used === 'number' ? used : null;
   } catch (_) {
+    console.log(_);
     return null;
   }
 }
@@ -81,8 +83,8 @@ async function estimateTrxTransfer(tw, { fromT, toT, amountTrx }, prices) {
   assertAddress(tw, fromT, 'from');
   assertAddress(tw, toT, 'to');
 
-  const fromHex = tw.address.toHex(fromT); // sendTrx needs owner in hex
-  const tx = await tw.transactionBuilder.sendTrx(toT, tw.toSun(amountTrx), fromHex);
+  //const fromHex = tw.address.toHex(fromT); // sendTrx needs owner in hex
+  const tx = await tw.transactionBuilder.sendTrx(toT, tw.toSun(amountTrx), fromT);
   const bytes = approxTxBytes(tx);
   const trxBandwidth = calcBandwidthTRX(bytes, prices.trxPerByte);
   return { kind: 'TRX_TRANSFER', energy: 0, bandwidthBytes: bytes, trxEnergy: 0, trxBandwidth, trxTotal: trxBandwidth };
@@ -90,58 +92,51 @@ async function estimateTrxTransfer(tw, { fromT, toT, amountTrx }, prices) {
 
 async function estimateTrc20Transfer(tw, { tokenT, fromT, toT, amount }, prices) {
   assertAddress(tw, tokenT, 'token');
-  assertAddress(tw, fromT,  'from');
-  assertAddress(tw, toT,    'to');
-
-  const tokenHex = toHexAddr(tw, tokenT);
-  const fromHex  = tw.address.toHex(fromT);
-  const toHex    = tw.address.toHex(toT);
+  assertAddress(tw, fromT, 'from');
+  assertAddress(tw, toT, 'to');
   const selector = 'transfer(address,uint256)';
-  const params   = [{ type: 'address', value: toHex }, { type: 'uint256', value: String(amount) }];
+  const params = [{ type: 'address', value: toT }, { type: 'uint256', value: String(amount) }];
 
-    energy = await safeTriggerConstantEnergy(tw, {
-      contractHex: tokenHex, selector, params, issuerBase58: fromT
-    });
+  energy = await safeTriggerConstantEnergy(tw, {
+    contractHex: tokenT, selector, params, from: fromT
+  });
 
   if (energy == null) energy = 0;
 
   // Build tx (issuer Base58 + feeLimit) for bandwidth bytes
   const trigger = await tw.transactionBuilder.triggerSmartContract(
-    tokenHex, selector, { callValue: 0, feeLimit: 1_000_000_000 }, params, fromT
+    tokenT, selector, { callValue: 0, feeLimit: 1_000_000_000 }, params, fromT
   );
   const bytes = approxTxBytes(trigger.transaction);
 
-  const trxEnergy    = calcEnergyTRX(energy, prices.trxPerEnergy);
-  const trxBandwidth = calcBandwidthTRX(bytes,  prices.trxPerByte);
+  const trxEnergy = calcEnergyTRX(energy, prices.trxPerEnergy);
+  const trxBandwidth = calcBandwidthTRX(bytes, prices.trxPerByte);
   return { kind: 'TRC20_TRANSFER', energy, bandwidthBytes: bytes, trxEnergy, trxBandwidth, trxTotal: trxEnergy + trxBandwidth };
 }
 
 async function estimateContractCall(tw, { contractT, fromT, selector, paramsJson, callValueTrx }, prices) {
   assertAddress(tw, contractT, 'contract');
-  assertAddress(tw, fromT,     'from');
-
-  const contractHex = toHexAddr(tw, contractT);
-  const fromHex     = tw.address.toHex(fromT);
-  const callValue   = Number(callValueTrx || 0);
+  assertAddress(tw, fromT, 'from');
+  const callValue = Number(callValueTrx || 0);
   const callValueSun = tw.toSun(callValue);
 
   let params = [];
   if (paramsJson) params = JSON.parse(paramsJson);
   params = normalizeParams(tw, params);
 
-    energy = await safeTriggerConstantEnergy(tw, {
-      contractHex, selector, params, issuerBase58: fromT, callValueSun
-    });
+  energy = await safeTriggerConstantEnergy(tw, {
+    contractHex: contractT, selector, params, from: fromT, callValueSun
+  });
 
   if (energy == null) energy = 0;
 
   const trigger = await tw.transactionBuilder.triggerSmartContract(
-    contractHex, selector, { callValue: callValueSun, feeLimit: 1_000_000_000 }, params, fromT
+    contractT, selector, { callValue: callValueSun, feeLimit: 1_000_000_000 }, params, fromT
   );
   const bytes = approxTxBytes(trigger.transaction);
 
-  const trxEnergy    = calcEnergyTRX(energy, prices.trxPerEnergy);
-  const trxBandwidth = calcBandwidthTRX(bytes,  prices.trxPerByte);
+  const trxEnergy = calcEnergyTRX(energy, prices.trxPerEnergy);
+  const trxBandwidth = calcBandwidthTRX(bytes, prices.trxPerByte);
   return { kind: 'CONTRACT_CALL', energy, bandwidthBytes: bytes, trxEnergy, trxBandwidth, trxTotal: trxEnergy + trxBandwidth };
 }
 
@@ -151,7 +146,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i].startsWith('--')) {
       const k = argv[i].slice(2);
-      const v = argv[i+1] && !argv[i+1].startsWith('--') ? argv[++i] : 'true';
+      const v = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : 'true';
       out[k] = v;
     }
   }
@@ -160,24 +155,30 @@ function parseArgs(argv) {
 
 // ---- main ----
 (async function main() {
-  const [,, cmd, ...rest] = process.argv;
-  if (!cmd || ['-h','--help','help'].includes(cmd)) {
+  const [, , cmd, ...rest] = process.argv;
+  if (!cmd || ['-h', '--help', 'help'].includes(cmd)) {
     console.log(`
 TRON Fee Estimator (TRONGRID-ready; uses .env; Base58 USDT)
 
 ENV (.env):
   TRON_FULL_NODE=${fullHost}
-  PRIVATE_KEY=${privateKey ? '<set>' : ''}
   DEFAULT_USDT=${DEFAULT_USDT_T}
 
 USAGE:
+
   node fee.js trx-transfer --from T... --to T... --amount-trx 1.5
 
   node fee.js trc20-transfer --from T... --to T... --amount 1000000 [--token ${DEFAULT_USDT_T}]
+  
+    ***IMPORTANT***
+    Make sure your "from" address has positive balance on the selected TRC20 token, otherwise estimation will fail
 
   node fee.js contract-call --contract T... --selector 'approve(address,uint256)' \\
     --params '[{"type":"address","value":"T..."},{"type":"uint256","value":"1000000"}]' \\
     --from T... --callValue 0
+
+    ***IMPORTANT***
+    Depending on your OS you might need to escape double quotes if sending params directly in terminal, as a recommendation please use a json file instead
 `); return;
   }
 
